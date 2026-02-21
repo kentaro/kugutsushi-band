@@ -10,6 +10,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$SCRIPT_DIR/.."
 LATTICE_DIR="$HOME/src/github.com/kentaro/lattice"
 
+# ─── 既存プロセスをクリーンアップ ─────────────────────────────────────────
+pkill -f puppet.py 2>/dev/null || true
+pkill sclang 2>/dev/null || true
+pkill jackd 2>/dev/null || true
+sleep 1
+
 # ─── lattice が存在するか確認 ─────────────────────────────────────────────
 if [ ! -f "$LATTICE_DIR/bin/lattice" ]; then
     echo "[start] ERROR: lattice not found at $LATTICE_DIR"
