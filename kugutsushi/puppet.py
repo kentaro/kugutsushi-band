@@ -93,12 +93,12 @@ class Puppet:
         return [n for n in GOL_SCALE if n not in gol]
 
     def _note_on(self, note: int, vel: int = 64):
-        self.midi_out.send_message([0x90, note, vel])  # ch1
+        self.midi_out.send_message([0x9F, note, vel])  # ch16 (index 15)
         with self.lock:
             self.my_active.add(note)
 
     def _note_off(self, note: int):
-        self.midi_out.send_message([0x80, note, 0])
+        self.midi_out.send_message([0x8F, note, 0])  # ch16
         with self.lock:
             self.my_active.discard(note)
 
