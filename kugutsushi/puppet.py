@@ -1,30 +1,42 @@
 #!/usr/bin/env python3
 """
-puppet.py — AI傀儡師
-GoLのMIDI出力を監視し、密度に応じて自動演奏する即興ロジック。
+puppet.py — AI傀儡師 (ドラマー)
+GoLのMIDI出力を監視し、密度に応じてローファイヒップホップのビートを叩く。
 
-- GoLのアクティブ音数(density)を計測
-- dense (>4音): 傀儡師は発音を減らしスペースを作る
-- sparse (<3音): 傀儡師がフィルインで埋める
-- スケール: GoLと同じ [60,65,70,76,81,86,91,96] 内で演奏
-- GoLが鳴らしていない音程を優先選択
+- dense (>4音): シンプルなビートに絞る / 休む
+- sparse (<3音): フィルインやバリエーションを増やす
+- 中間: 基本ビートをキープ
 """
 
 import time
 import random
 import threading
 import rtmidi
-from rtmidi.midiutil import open_midiinput
 
-# GoL と傀儡師が共有するスケール (Slendro系, D-minor pentatonic variant)
-GOL_SCALE = [60, 65, 70, 76, 81, 86, 91, 96]
+# ─── ドラムマッピング (lattice の ch10 パッド割り当て) ───────────────────
+KICK = 36
+SNARE = 37
+HIHAT = 38
+OPENHAT = 39
+LOFI_KICK_L = 40
+LOFI_KICK_M = 41
+LOFI_KICK_H = 42
+CLAP = 43
+PERC1 = 44
+PERC2 = 45
 
-CHANNEL_GOL = 0   # ch1 (0-indexed) — GoLの出力チャンネル
+CH_DRUM = 9  # ch10 (0-indexed)
+CHANNEL_GOL = 0  # GoLの出力チャンネル
+
+# ─── BPM ──────────────────────────────────────────────────────────────────
+BPM = 78  # ローファイヒップホップの典型テンポ
+BEAT = 60.0 / BPM  # 1拍の秒数
+SIXTEENTH = BEAT / 4
+
 
 class Puppet:
     def __init__(self):
-        self.gol_active: set[int] = set()   # GoLが現在鳴らしているノート
-        self.my_active: set[int] = set()    # 傀儡師が鳴らしているノート
+        self.gol_active: set[int] = set()
         self.lock = threading.Lock()
 
         # 入力: GoL の MIDI を監視
@@ -36,13 +48,11 @@ class Puppet:
         self.midi_out.open_virtual_port("Kugutsushi")
         print("[puppet] Virtual MIDI port 'Kugutsushi' opened.")
 
-        # GoL の MIDI ポートを探して接続
         self._connect_gol_input()
-
         self.running = False
+        self.bar = 0  # 現在の小節数
 
     def _connect_gol_input(self):
-        """GoL MIDI ポートを探して接続する。見つからなければ仮想入力で待機。"""
         ports = self.midi_in.get_ports()
         print(f"[puppet] Available MIDI input ports: {ports}")
         gol_port = next(
@@ -53,7 +63,6 @@ class Puppet:
             self.midi_in.open_port(gol_port)
             print(f"[puppet] Connected to GoL MIDI port: {ports[gol_port]}")
         else:
-            # 仮想入力ポートで待機 (テスト用)
             self.midi_in.open_virtual_port("Kugutsushi-Monitor")
             print("[puppet] GoL not found. Opened virtual monitor port.")
 
@@ -61,21 +70,18 @@ class Puppet:
         self.midi_in.ignore_types(sysex=True, timing=True, active_sense=True)
 
     def _on_midi(self, event, data=None):
-        """GoL の MIDI イベントを受信して density を更新する。"""
         msg, _ = event
         if len(msg) < 3:
             return
         status, note, vel = msg[0], msg[1], msg[2]
         ch = status & 0x0F
         msg_type = status & 0xF0
-
         if ch != CHANNEL_GOL:
             return
-
         with self.lock:
-            if msg_type == 0x90 and vel > 0:   # note_on
+            if msg_type == 0x90 and vel > 0:
                 self.gol_active.add(note)
-            elif msg_type == 0x80 or (msg_type == 0x90 and vel == 0):  # note_off
+            elif msg_type == 0x80 or (msg_type == 0x90 and vel == 0):
                 self.gol_active.discard(note)
 
     @property
@@ -83,88 +89,115 @@ class Puppet:
         with self.lock:
             return len(self.gol_active)
 
-    def _gol_active_snapshot(self) -> set[int]:
-        with self.lock:
-            return set(self.gol_active)
+    def _hit(self, note: int, vel: int = 80):
+        """ドラムを1回叩く (ch10)"""
+        self.midi_out.send_message([0x99, note, vel])
+        # ドラムは打楽器なので即座にnote_off
+        self.midi_out.send_message([0x89, note, 0])
 
-    def _available_notes(self) -> list[int]:
-        """GoLが鳴らしていないスケール音を返す。"""
-        gol = self._gol_active_snapshot()
-        return [n for n in GOL_SCALE if n not in gol]
+    def _humanize(self, vel: int, amount: int = 15) -> int:
+        """ベロシティに揺らぎを加える"""
+        return max(30, min(120, vel + random.randint(-amount, amount)))
 
-    def _note_on(self, note: int, vel: int = 64):
-        self.midi_out.send_message([0x9F, note, vel])  # ch16 (index 15)
-        with self.lock:
-            self.my_active.add(note)
+    def _swing_delay(self, step: int) -> float:
+        """偶数ステップにスウィング感 (裏拍を少し遅らせる)"""
+        if step % 2 == 1:
+            return SIXTEENTH * random.uniform(0.05, 0.15)
+        return 0
 
-    def _note_off(self, note: int):
-        self.midi_out.send_message([0x8F, note, 0])  # ch16
-        with self.lock:
-            self.my_active.discard(note)
+    def _play_basic_beat(self, step: int):
+        """基本ビート: kick-hat-snare-hat パターン"""
+        # step: 0-15 (16ステップ = 1小節)
+        vel_kick = self._humanize(90)
+        vel_snare = self._humanize(85)
+        vel_hat = self._humanize(50)
 
-    def _silence_all(self):
-        """現在鳴らしている全音を止める。"""
-        with self.lock:
-            notes = list(self.my_active)
-        for note in notes:
-            self._note_off(note)
+        # キック: 1拍目 + 3拍目の手前
+        if step == 0:
+            self._hit(KICK, vel_kick)
+        elif step == 6:
+            self._hit(LOFI_KICK_M, self._humanize(70))
+        elif step == 10 and random.random() < 0.3:
+            self._hit(KICK, self._humanize(60))
 
-    def _play_fillin(self, count: int = 2):
-        """空きスケール音から count 音選んで短く鳴らす。"""
-        available = self._available_notes()
-        if not available:
-            return
-        chosen = random.sample(available, min(count, len(available)))
-        dur = random.uniform(0.15, 0.5)
-        vel = random.randint(45, 80)
-        for note in chosen:
-            self._note_on(note, vel)
-        time.sleep(dur)
-        for note in chosen:
-            self._note_off(note)
+        # スネア: 2拍目 + 4拍目
+        if step == 4:
+            self._hit(SNARE, vel_snare)
+        elif step == 12:
+            self._hit(SNARE, vel_snare)
+
+        # ハイハット: 8分音符
+        if step % 2 == 0:
+            self._hit(HIHAT, vel_hat)
+        elif random.random() < 0.3:
+            # ゴーストハット
+            self._hit(HIHAT, self._humanize(30, 5))
+
+    def _play_sparse_beat(self, step: int):
+        """GoLが静かなとき: フィルインやバリエーション多め"""
+        self._play_basic_beat(step)
+
+        # 追加のフィルイン要素
+        if step == 14 and random.random() < 0.5:
+            self._hit(CLAP, self._humanize(65))
+        if step == 15 and random.random() < 0.4:
+            self._hit(LOFI_KICK_L, self._humanize(55))
+        if step in (13, 14, 15) and random.random() < 0.3:
+            self._hit(random.choice([PERC1, PERC2]), self._humanize(45))
+        # オープンハット
+        if step == 8 and random.random() < 0.4:
+            self._hit(OPENHAT, self._humanize(55))
+
+    def _play_dense_beat(self, step: int):
+        """GoLが賑やかなとき: シンプルに引く"""
+        vel_hat = self._humanize(35, 5)
+
+        # キックとスネアだけ最低限
+        if step == 0:
+            self._hit(KICK, self._humanize(70))
+        if step == 4 or step == 12:
+            self._hit(SNARE, self._humanize(60))
+
+        # ハイハットは4拍のみ
+        if step % 4 == 0:
+            self._hit(HIHAT, vel_hat)
 
     def run(self):
-        """メインループ: density に応じて演奏/休止を切り替える。"""
         self.running = True
-        print("[puppet] Running. Press Ctrl+C to stop.")
+        print(f"[puppet] Drummer mode. BPM={BPM}. Press Ctrl+C to stop.")
         try:
             while self.running:
                 d = self.density
-                my_count = len(self.my_active)
+                for step in range(16):
+                    if not self.running:
+                        break
 
-                if d > 4:
-                    # GoLが賑やか → 傀儡師は引いてスペースを作る
-                    if my_count > 0:
-                        self._silence_all()
-                    # ランダムな休止
-                    time.sleep(random.uniform(0.3, 1.0))
+                    swing = self._swing_delay(step)
+                    if swing > 0:
+                        time.sleep(swing)
 
-                elif d < 3:
-                    # GoLが閑散 → フィルイン
-                    fill_count = random.randint(1, 3)
-                    self._play_fillin(fill_count)
-                    # フィルイン間の間隔
-                    time.sleep(random.uniform(0.2, 0.8))
+                    if d > 4:
+                        self._play_dense_beat(step)
+                    elif d < 3:
+                        self._play_sparse_beat(step)
+                    else:
+                        self._play_basic_beat(step)
 
-                else:
-                    # 中間 → ゆっくり単音で絡む
-                    available = self._available_notes()
-                    if available and random.random() < 0.4:
-                        note = random.choice(available)
-                        vel = random.randint(40, 70)
-                        dur = random.uniform(0.2, 0.6)
-                        self._note_on(note, vel)
-                        time.sleep(dur)
-                        self._note_off(note)
-                    time.sleep(random.uniform(0.3, 0.9))
+                    # density を定期的に更新
+                    if step % 4 == 0:
+                        d = self.density
+
+                    time.sleep(SIXTEENTH - swing)
+
+                self.bar += 1
 
         except KeyboardInterrupt:
             print("\n[puppet] Stopping...")
         finally:
-            self._silence_all()
             self.midi_in.close_port()
             self.midi_out.close_port()
             print("[puppet] Done.")
+
 
 def main():
     puppet = Puppet()
