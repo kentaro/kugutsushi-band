@@ -2,6 +2,10 @@
 
 バンド統合プロジェクト。lattice + gol-synth + AI傀儡師を束ねる。
 
+## デモ動画
+
+https://github.com/user-attachments/assets/359a4448-c0a8-44a9-9b7d-f5eea4a6eb88
+
 ## 構成
 
 ```
