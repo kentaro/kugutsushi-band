@@ -1,0 +1,56 @@
+#!/bin/bash
+# start — kugutsushi-band マスター起動スクリプト
+# 1. lattice (SuperCollider) 起動
+# 2. MIDI ルーティング設定
+# 3. AI 傀儡師起動
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$SCRIPT_DIR/.."
+LATTICE_DIR="$HOME/src/github.com/kentaro/lattice"
+
+# ─── lattice が存在するか確認 ─────────────────────────────────────────────
+if [ ! -f "$LATTICE_DIR/bin/lattice" ]; then
+    echo "[start] ERROR: lattice not found at $LATTICE_DIR"
+    echo "  Clone it first: git clone https://github.com/kentaro/lattice $LATTICE_DIR"
+    exit 1
+fi
+
+# ─── 1. lattice (SuperCollider) をバックグラウンドで起動 ──────────────────
+echo "[start] Starting lattice (SuperCollider)..."
+bash "$LATTICE_DIR/bin/lattice" &
+LATTICE_PID=$!
+echo "[start] lattice PID: $LATTICE_PID"
+
+# SC が起動して MIDI ポートが現れるまで待つ
+echo "[start] Waiting for SuperCollider to boot (8s)..."
+sleep 8
+
+# ─── 2. MIDI ルーティング ──────────────────────────────────────────────────
+echo "[start] Configuring MIDI routing..."
+bash "$REPO_DIR/routing/connect.sh"
+
+# ─── 3. AI 傀儡師 ──────────────────────────────────────────────────────────
+echo "[start] Starting AI puppet (kugutsushi)..."
+PUPPET_DIR="$REPO_DIR/kugutsushi"
+
+# uv で仮想環境を使う (uvがなければ python3 直接)
+if command -v uv &>/dev/null; then
+    (cd "$PUPPET_DIR" && uv run python puppet.py) &
+else
+    (cd "$PUPPET_DIR" && python3 puppet.py) &
+fi
+PUPPET_PID=$!
+echo "[start] puppet PID: $PUPPET_PID"
+
+echo ""
+echo "╔══════════════════════════════════════╗"
+echo "║  kugutsushi-band ready               ║"
+echo "║  Ctrl+C to stop all                  ║"
+echo "╚══════════════════════════════════════╝"
+
+# Ctrl+C で全プロセスを止める
+trap "echo '[start] Stopping...'; kill $LATTICE_PID $PUPPET_PID 2>/dev/null; exit 0" INT TERM
+
+wait
