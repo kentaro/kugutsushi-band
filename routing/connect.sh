@@ -6,10 +6,9 @@ set -e
 
 echo "[routing] Setting up MIDI connections..."
 
-# SuperCollider が起動するまでポートが現れない場合があるので少し待つ
 wait_for_port() {
     local name="$1"
-    local max_wait=30
+    local max_wait="${2:-30}"
     local elapsed=0
     while ! aconnect -l | grep -q "$name"; do
         if [ $elapsed -ge $max_wait ]; then
@@ -28,7 +27,7 @@ wait_for_port "SuperCollider" || { echo "[routing] ERROR: SuperCollider port not
 
 # gol-synth → lattice
 if aconnect -l | grep -q "Game of Life MIDI"; then
-    aconnect 'Game of Life MIDI':0 'SuperCollider':0
+    aconnect 'Game of Life MIDI':0 'SuperCollider':0 2>/dev/null || true
     echo "[routing] gol-synth → SuperCollider"
 else
     echo "[routing] INFO: gol-synth not connected, skipping."
@@ -36,32 +35,19 @@ fi
 
 # Launchkey Mini MK4 25 → lattice
 if aconnect -l | grep -q "Launchkey Mini MK4 25"; then
-    aconnect 'Launchkey Mini MK4 25':0 'SuperCollider':0
+    aconnect 'Launchkey Mini MK4 25':0 'SuperCollider':0 2>/dev/null || true
+    aconnect 'Launchkey Mini MK4 25':1 'SuperCollider':0 2>/dev/null || true
     echo "[routing] Launchkey → SuperCollider"
 else
     echo "[routing] INFO: Launchkey not connected, skipping."
 fi
 
-# 傀儡師 仮想ポート → lattice (傀儡師起動後に接続)
-wait_for_port() {
-    local name="$1"
-    local max_wait=15
-    local elapsed=0
-    while ! aconnect -l | grep -q "$name"; do
-        if [ $elapsed -ge $max_wait ]; then
-            return 1
-        fi
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-    return 0
-}
-
-if wait_for_port "Kugutsushi"; then
-    aconnect 'Kugutsushi':0 'SuperCollider':0
+# 傀儡師 仮想ポート → lattice
+if aconnect -l | grep -q "Kugutsushi"; then
+    aconnect 'Kugutsushi':0 'SuperCollider':0 2>/dev/null || true
     echo "[routing] Kugutsushi → SuperCollider"
 else
-    echo "[routing] INFO: Kugutsushi port not ready, skipping."
+    echo "[routing] INFO: Kugutsushi port not found, skipping."
 fi
 
 echo "[routing] MIDI routing complete."

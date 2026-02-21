@@ -1,8 +1,8 @@
 #!/bin/bash
 # start — kugutsushi-band マスター起動スクリプト
 # 1. lattice (SuperCollider) 起動
-# 2. MIDI ルーティング設定
-# 3. AI 傀儡師起動
+# 2. AI 傀儡師起動
+# 3. MIDI ルーティング設定 (全ポートが揃ってから)
 
 set -e
 
@@ -13,7 +13,7 @@ LATTICE_DIR="$HOME/src/github.com/kentaro/lattice"
 # ─── lattice が存在するか確認 ─────────────────────────────────────────────
 if [ ! -f "$LATTICE_DIR/bin/lattice" ]; then
     echo "[start] ERROR: lattice not found at $LATTICE_DIR"
-    echo "  Clone it first: git clone https://github.com/kentaro/lattice $LATTICE_DIR"
+    echo "  Clone it first: git clone git@github.com:kentaro/lattice.git $LATTICE_DIR"
     exit 1
 fi
 
@@ -23,26 +23,30 @@ bash "$LATTICE_DIR/bin/lattice" &
 LATTICE_PID=$!
 echo "[start] lattice PID: $LATTICE_PID"
 
-# SC が起動して MIDI ポートが現れるまで待つ
-echo "[start] Waiting for SuperCollider to boot (8s)..."
-sleep 8
+echo "[start] Waiting for SuperCollider to boot (10s)..."
+sleep 10
 
-# ─── 2. MIDI ルーティング ──────────────────────────────────────────────────
-echo "[start] Configuring MIDI routing..."
-bash "$REPO_DIR/routing/connect.sh"
-
-# ─── 3. AI 傀儡師 ──────────────────────────────────────────────────────────
+# ─── 2. AI 傀儡師を起動 (仮想MIDIポート "Kugutsushi" を作る) ─────────────
 echo "[start] Starting AI puppet (kugutsushi)..."
 PUPPET_DIR="$REPO_DIR/kugutsushi"
 
-# uv で仮想環境を使う (uvがなければ python3 直接)
-if command -v uv &>/dev/null; then
+if [ -f "$PUPPET_DIR/.venv/bin/python" ]; then
+    "$PUPPET_DIR/.venv/bin/python" "$PUPPET_DIR/puppet.py" &
+elif command -v uv &>/dev/null; then
     (cd "$PUPPET_DIR" && uv run python puppet.py) &
 else
-    (cd "$PUPPET_DIR" && python3 puppet.py) &
+    python3 "$PUPPET_DIR/puppet.py" &
 fi
 PUPPET_PID=$!
 echo "[start] puppet PID: $PUPPET_PID"
+
+# 傀儡師の仮想MIDIポートが現れるまで待つ
+echo "[start] Waiting for puppet MIDI port (3s)..."
+sleep 3
+
+# ─── 3. MIDI ルーティング (全ポートが揃った状態で接続) ────────────────────
+echo "[start] Configuring MIDI routing..."
+bash "$REPO_DIR/routing/connect.sh"
 
 echo ""
 echo "╔══════════════════════════════════════╗"
