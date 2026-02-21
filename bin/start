@@ -12,8 +12,10 @@ LATTICE_DIR="$HOME/src/github.com/kentaro/lattice"
 
 # ─── 既存プロセスをクリーンアップ ─────────────────────────────────────────
 pkill -f puppet.py 2>/dev/null || true
+pkill -f drummer.py 2>/dev/null || true
 pkill sclang 2>/dev/null || true
 pkill jackd 2>/dev/null || true
+echo stop > /tmp/drum.cmd 2>/dev/null || true
 sleep 1
 
 # ─── lattice が存在するか確認 ─────────────────────────────────────────────
@@ -46,21 +48,33 @@ fi
 PUPPET_PID=$!
 echo "[start] puppet PID: $PUPPET_PID"
 
-# 傀儡師の仮想MIDIポートが現れるまで待つ
-echo "[start] Waiting for puppet MIDI port (3s)..."
+# ─── 3. ドラムデーモンを起動 ──────────────────────────────────────────────
+echo "[start] Starting drummer daemon..."
+if [ -f "$PUPPET_DIR/.venv/bin/python" ]; then
+    "$PUPPET_DIR/.venv/bin/python" "$PUPPET_DIR/drummer.py" &
+else
+    python3 "$PUPPET_DIR/drummer.py" &
+fi
+DRUMMER_PID=$!
+echo "[start] drummer PID: $DRUMMER_PID"
+
+# MIDIポートが揃うまで待つ
+echo "[start] Waiting for MIDI ports (3s)..."
 sleep 3
 
-# ─── 3. MIDI ルーティング (全ポートが揃った状態で接続) ────────────────────
+# ─── 4. MIDI ルーティング (全ポートが揃った状態で接続) ────────────────────
 echo "[start] Configuring MIDI routing..."
 bash "$REPO_DIR/routing/connect.sh"
 
 echo ""
-echo "╔══════════════════════════════════════╗"
-echo "║  kugutsushi-band ready               ║"
-echo "║  Ctrl+C to stop all                  ║"
-echo "╚══════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════════╗"
+echo "║  kugutsushi-band ready                       ║"
+echo "║  echo start > /tmp/drum.cmd  → ドラム開始   ║"
+echo "║  echo stop  > /tmp/drum.cmd  → ドラム停止   ║"
+echo "║  Ctrl+C to stop all                          ║"
+echo "╚══════════════════════════════════════════════╝"
 
 # Ctrl+C で全プロセスを止める
-trap "echo '[start] Stopping...'; kill $LATTICE_PID $PUPPET_PID 2>/dev/null; exit 0" INT TERM
+trap "echo '[start] Stopping...'; kill $LATTICE_PID $PUPPET_PID $DRUMMER_PID 2>/dev/null; exit 0" INT TERM
 
 wait
